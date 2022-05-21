@@ -1,0 +1,63 @@
+[CmdletBinding()]
+param (
+    [string]$SysmonConfigUrl = "https://raw.githubusercontent.com/SwiftOnSecurity/sysmon-config/master/sysmonconfig-export.xml"
+)
+
+write-host "[+] Processing Sysmon Installation.."
+$URL = "https://download.sysinternals.com/files/Sysmon.zip"
+Resolve-DnsName download.sysinternals.com
+Resolve-DnsName github.com
+Resolve-DnsName raw.githubusercontent.com
+
+$OutputFile = Split-Path $Url -leaf
+$File = "C:\Users\student\Downloads\$OutputFile"
+
+# Download File
+write-Host "[+] Downloading $OutputFile .."
+[Net.ServicePointManager]::SecurityProtocol = "tls12, tls11, tls"
+$wc = new-object System.Net.WebClient
+$wc.DownloadFile($Url, $File)
+if (!(Test-Path $File)) { Write-Error "File $File does not exist" -ErrorAction Stop }
+
+if ($File.ToLower().EndsWith(".zip"))
+{
+    # Unzip file
+    write-Host "  [+] Decompressing $OutputFile .."
+    $UnpackName = (Get-Item $File).Basename
+    $SysmonFolder = "C:\Users\student\Downloads\$UnpackName"
+    $SysmonBinary = "$SysmonFolder\Sysmon64.exe"
+    expand-archive -path $File -DestinationPath $SysmonFolder
+    if (!(Test-Path $SysmonFolder)) { Write-Error "$File was not decompressed successfully" -ErrorAction Stop }
+}
+# Downloading Sysmon Configuration
+write-Host "[+] Downloading Sysmon config.."
+$SysmonFile = "C:\Users\student\Downloads\sysmonconfig-export.xml"
+$wc.DownloadFile($SysmonConfigUrl, $SysmonFile)
+if (!(Test-Path $SysmonFile)) { Write-Error "File $SysmonFile does not exist" -ErrorAction Stop }
+
+# Installing Sysmon
+write-Host "[+] Installing Sysmon.."
+& $SysmonBinary -i C:\Users\student\Downloads\sysmonconfig-export.xml -accepteula
+
+write-Host "[+] Setting Sysmon to start automatically.."
+& sc.exe config Sysmon64 start= auto
+
+# Setting Sysmon Channel Access permissions
+write-Host "[+] Setting up Channel Access permissions for Microsoft-Windows-Sysmon/Operational "
+wevtutil set-log Microsoft-Windows-Sysmon/Operational /ca:'O:BAG:SYD:(A;;0xf0005;;;SY)(A;;0x5;;;BA)(A;;0x1;;;S-1-5-32-573)(A;;0x1;;;NS)'
+#New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WINEVT\Channels\Microsoft-Windows-Sysmon/Operational" -Name "ChannelAccess" -PropertyType String -Value "O:BAG:SYD:(A;;0xf0005;;;SY)(A;;0x5;;;BA)(A;;0x1;;;S-1-5-32-573)(A;;0x1;;;NS)" -Force
+
+write-Host "[+] Restarting Sysmon .."
+Restart-Service -Name Sysmon64 -Force
+
+write-Host "  [*] Verifying if Sysmon is running.."
+$s = Get-Service -Name Sysmon64
+while ($s.Status -ne 'Running') { Start-Service Sysmon; Start-Sleep 3 }
+Start-Sleep 5
+write-Host "  [*] Sysmon is running.."
+
+#wazuh-agent
+write-Host "  [*] Install and Downloads Wazuh-Agent..."
+Invoke-WebRequest -Uri https://packages.wazuh.com/4.x/windows/wazuh-agent-4.3.0-1.msi -OutFile ${env:tmp}\wazuh-agent-4.3.0.msi; msiexec.exe /i ${env:tmp}\wazuh-agent-4.3.0.msi /q WAZUH_MANAGER='139.144.25.167' WAZUH_REGISTRATION_SERVER='139.144.25.167' 
+NET START WazuhSvc
+write-Host "  [*] Wazuh-Agent is running.."
